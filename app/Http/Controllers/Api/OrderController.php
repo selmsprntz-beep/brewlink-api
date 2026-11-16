@@ -19,18 +19,24 @@ class OrderController extends Controller
 {
     public function store(Request $request): JsonResponse
     {
+        // Remove spaces and dashes first (e.g. "1234 567 890123" -> "1234567890123")
+        $this->normalizeReference($request);
+
         $data = $request->validate([
             'table_token' => 'nullable|string|exists:cafe_tables,qr_token',
             'customer_name' => 'required|string|max:100',
             'order_type' => 'required|in:dine_in,takeout',
             'payment_method' => 'required|in:cash,gcash',
-            // GI-FIX: gidugang ang reference_no (required kung GCash)
-            'reference_no' => 'required_if:payment_method,gcash|nullable|string|max:30',
+            // GCash Reference No.: required for GCash, exactly 13 digits (numbers only)
+            'reference_no' => ['required_if:payment_method,gcash', 'nullable', 'digits:13'],
             'notes' => 'nullable|string|max:500',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1|max:50',
             'items.*.size' => 'nullable|in:Tall,Grande',
+        ], [
+            'reference_no.required_if' => 'Enter the GCash Reference No.',
+            'reference_no.digits' => 'The GCash Reference No. must be exactly 13 digits (numbers only).',
         ]);
 
         $order = DB::transaction(function () use ($data) {
@@ -96,7 +102,7 @@ class OrderController extends Controller
                     'order_id' => $order->id,
                     'method' => 'gcash',
                     'amount' => $total,
-                    'reference_no' => $data['reference_no'] ?? null, 
+                    'reference_no' => $data['reference_no'] ?? null,
                     'status' => 'pending',
                 ]);
             }
@@ -112,8 +118,15 @@ class OrderController extends Controller
 
     public function storeGcashReference(Request $request, Order $order): JsonResponse
     {
+        // Remove spaces and dashes first
+        $this->normalizeReference($request);
+
+        // GCash Reference No. must be exactly 13 digits (numbers only)
         $data = $request->validate([
-            'reference_no' => 'required|string|max:30',
+            'reference_no' => ['required', 'digits:13'],
+        ], [
+            'reference_no.required' => 'Enter the GCash Reference No.',
+            'reference_no.digits' => 'The GCash Reference No. must be exactly 13 digits (numbers only).',
         ]);
 
         $payment = Payment::updateOrCreate(
@@ -235,38 +248,60 @@ class OrderController extends Controller
 
 
     public function recordCash(Order $order): JsonResponse
-{
-    if ($order->payment_method !== 'cash') {
-        abort(422, 'This is not a cash order.');
+    {
+        if ($order->payment_method !== 'cash') {
+            abort(422, 'This is not a cash order.');
+        }
+
+        if ($order->status === 'cancelled') {
+            abort(422, 'Cannot record payment for a cancelled order.');
+        }
+
+        DB::transaction(function () use ($order) {
+            Payment::updateOrCreate(
+                [
+                    'order_id' => $order->id,
+                    'method' => 'cash',
+                ],
+                [
+                    'amount' => $order->total,
+                    'status' => 'verified',
+                    'received_by' => Auth::id(),
+                    'verified_by' => Auth::id(),
+                    'verified_at' => now(),
+                    'paid_at' => now(),
+                ]
+            );
+
+            $order->update(['is_paid' => true]);
+        });
+
+        return response()->json(
+            $order->fresh()->load(['items', 'cafeTable', 'payments'])
+        );
     }
 
-    if ($order->status === 'cancelled') {
-        abort(422, 'Cannot record payment for a cancelled order.');
-    }
+    /**
+     * Clean the reference_no before validation:
+     * remove spaces and dashes; empty values become null.
+     */
+    private function normalizeReference(Request $request): void
+    {
+        if (!$request->has('reference_no')) {
+            return;
+        }
 
-    DB::transaction(function () use ($order) {
-        Payment::updateOrCreate(
-            [
-                'order_id' => $order->id,
-                'method' => 'cash',
-            ],
-            [
-                'amount' => $order->total,
-                'status' => 'verified',
-                'received_by' => Auth::id(),
-                'verified_by' => Auth::id(),
-                'verified_at' => now(),
-                'paid_at' => now(),
-            ]
+        $clean = preg_replace(
+            '/[\s-]+/',
+            '',
+            (string) $request->input('reference_no')
         );
 
-        $order->update(['is_paid' => true]);
-    });
+        $request->merge([
+            'reference_no' => $clean === '' ? null : $clean,
+        ]);
+    }
 
-    return response()->json(
-        $order->fresh()->load(['items', 'cafeTable', 'payments'])
-    );
-}
     private function grandePrice(Product $product): ?float
     {
         $visible = $product->toArray();

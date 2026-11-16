@@ -11,13 +11,26 @@ use Illuminate\Support\Facades\DB;
 
 class PaymentVerificationController extends Controller
 {
-    
+
     public function submitReference(
         Request $request,
         Order $order
     ): JsonResponse {
+        // Remove spaces and dashes first (e.g. "1234 567 890123" -> "1234567890123")
+        $request->merge([
+            'reference_no' => preg_replace(
+                '/[\s-]+/',
+                '',
+                (string) $request->input('reference_no')
+            ),
+        ]);
+
+        // GCash Reference No. must be exactly 13 digits (numbers only)
         $data = $request->validate([
-            'reference_no' => 'required|string|max:100',
+            'reference_no' => ['required', 'digits:13'],
+        ], [
+            'reference_no.required' => 'Enter the GCash Reference No.',
+            'reference_no.digits'   => 'The GCash Reference No. must be exactly 13 digits (numbers only).',
         ]);
 
         $payment = DB::transaction(function () use ($order, $data) {
@@ -91,7 +104,7 @@ class PaymentVerificationController extends Controller
         ]);
     }
 
-  
+
     public function verify(Payment $payment): JsonResponse
     {
         $result = DB::transaction(function () use ($payment) {
@@ -142,7 +155,7 @@ class PaymentVerificationController extends Controller
         ]);
     }
 
-   
+
     public function reject(
         Request $request,
         Payment $payment
