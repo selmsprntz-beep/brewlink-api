@@ -8,7 +8,7 @@ return [
     'allowed_origins' => [
     'http://localhost:4200',
     'http://127.0.0.1:4200',
-    'https://beamish-horse-ea84e3.netlify.app',
+    'https://brewlink-cafe.netlify.app',
 ],
 
     // Allows testing from a phone on the same Wi-Fi (e.g. http://192.168.1.10:4200) for the table QR codes
